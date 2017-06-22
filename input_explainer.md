@@ -107,24 +107,24 @@ function printControllerStates() {
     `string text ${expression} string text`
     let controllerString = `Controller State (hand: ${controller.hand})\n`;
 
-    controllerString += inputStateString(input.touchpad);
-    controllerString += inputStateString(input.joystick);
-    controllerString += inputStateString(input.trigger);
-    controllerString += inputStateString(input.grip);
+    controllerString += inputStateString('touchpad', input.touchpad);
+    controllerString += inputStateString('joystick', input.joystick);
+    controllerString += inputStateString('trigger', input.trigger);
+    controllerString += inputStateString('grip', input.grip);
 
-    for (let button of input.buttons) {
-      controllerString += inputStateString(button);
+    for (let [name, input] of input.extendedInputs) {
+      controllerString += inputStateString(name, input);
     }
 
     console.log(controllerString);
   }
 }
 
-function inputStateString(input) {
+function inputStateString(name, input) {
   if (!input)
     return null;
 
-  let stateString = `${input.name} - `;
+  let stateString = `${name} - `;
 
   if (input.xAxis)
     stateString += `X: ${input.xAxis}, `;
@@ -223,7 +223,7 @@ interface VRController {
   readonly attribute VRControllerInput? joystick;
   readonly attribute VRControllerInput? trigger;
   readonly attribute VRControllerInput? grip;
-  readonly attribute FrozenArray<VRControllerInput> buttons;
+  readonly attribute VRControllerInputMap extendedInputs;
 
   VRControllerInput? queryInput(DOMString selector); // v0.1+?
 };
@@ -237,6 +237,10 @@ interface VRControllerPose {
   readonly attribute Float32Array? pointerFromOriginMatrix;
 
   // velocity/acceleration here? v0.1+?
+};
+
+interface VRControllerInputMap {
+  readonly maplike<DOMString, VRControllerInput>;
 };
 
 // Live object
