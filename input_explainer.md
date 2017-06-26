@@ -12,8 +12,8 @@ Whereas the WebVR spec is primarily concerned with detecting headset movement an
 ### Goals
 Define core input models for Virtual Reality applications on the web by providing the following:
 
-* Access to raw pose, button, and axis data of VR input devices.
-* A higher-level, ray-based input system that works with most VR systems.
+* A high level, ray-based input system that works with most VR systems across multiple input sources.
+* Access to raw pose, button, and axis data of purpose-built VR controllers.
 
 // Future goals? (v0.1+?)
 * Default visualizations for VR input.
@@ -30,7 +30,7 @@ As a special note on that last item: We expect that most VR system will eventual
 ## Use cases
 There's two ways to use the VR input API:
 
-**Event Based:** The app registers event listeners to inform it of when the user interacts with the input devices. This is similar to mouse, touch, or pointer events on the 2D DOM. The primary difference is that the page is still responsible for handling scene rendering and determining what object the user is interacting with (frequently via a ray cast into the scene.)
+**Event Based:** The app registers event listeners to inform it of when the user interacts with the input devices. This is similar to mouse, touch, or pointer events on the 2D DOM. The primary difference is that the application is still responsible for handling scene rendering and determining what object the user is interacting with (frequently via a ray cast into the scene.)
 
 This approach makes it easy to determine when the user is performing discreet actions across a wide range of devices, but it only provides snapshots of the input state when the user performs some action.
 
@@ -38,10 +38,64 @@ This approach makes it easy to determine when the user is performing discreet ac
 
 Both models CAN be used in tandem if needed.
 
+## Types of Input
+
+### Input Sources
+VR applications may receive input from a variety of different sources. To name just a few possibilities:
+ - Purpose-built VR controller with some level of tracking capability (Vive, Rift, Daydream, etc.)
+ - Optical hand tracking of varying levels of detail (HoloLens, Leap Motion)
+ - Touchpad on the headset (GearVR)
+ - Single button on the headset (Cardboard)
+ - Simple handheld bluetooth clicker (Cardboard)
+ - Gamepad (Rift, GearVR)
+ - Mouse/Keyboard/Touch/Stylus
+
+Obviously these all represent wildly different styles of input, which can be very difficult for individual applications to make sense of in a consistent manner. The primary goal of the WebVR input API is to provide a high level abstraction of all these input sources. It does this by generating a pointer ray for any input source that can be used to select objects in the VR scene. It also exposes a series of semantic "gesture" events that indicate the action the user wishes to apply to the target of the pointer.
+
+The inputs devices used to generate those events are represented by a `VRInputSource` object. The input source can be used to query pose and pointer information, as well as describing the `type` of input source it represents.
+
+```js
+function processInputSource(inputSource) {
+  switch (inputSource.type) {
+    case 'pointerevent': processPointerEvents();
+    case 'gamepad': processGamepad(inputSource.gamepad);
+    case 'controller': processController(inputSource);
+  }
+}
+```
+
+The `VRInputSource` also describes where the pointer ray will originate from, which can be used to determine what type of rendering is appropriate for that input.
+
+```js
+function shouldDrawCursor(inputSource) {
+  switch (inputSource.pointerOrigin) {
+    case 'screen': return false;
+    case 'head': return true;
+    case 'hand': return true;
+  }
+}
+
+function shouldDrawRay(inputSource) {
+  switch (inputSource.pointerOrigin) {
+    case 'screen': return false;
+    case 'head': return false;
+    case 'hand': return true;
+  }
+}
+```
+
+### Primary input device
+Every `VRPresentationFrame` reports a `primaryInputSource`. This can change from frame to frame, and may jump between different source types as the user interacts with various devices. In most cases, though, the frame's `primaryInputSource` is the one that will be generating gesture events and should be considered first before processing other input sources.
+
+### Controller state
+The WebVR input API also exposes the state of the raw input elements of purpose built VR controllers, such as the tracked controllers for the Vive or Daydream systems, but does not attempt to describe the state of input sources that are already surfaced by the UA, such as mouse, keyboard, touch, stylus, or gamepad inputs.
+
+These controllers can be queried from the `VRSession` with the `getControllers` method, which returns an array of the currently connected controllers.
+
 ## Basic WebVR Input usage
 
 ### Pose Tracking
-Whether the application is using an event or polling based input system, tracking the controller's pose is handled the same way. Input events, just like `requestFrame` callbacks, will provide a `VRFrame` object that can be used to query the pose of controllers in a given coordinate system. The `frame` can also be used to query the `VRDevicePose`, but since these events fall outside the render loop no `VRViews` will be provided.
+Whether the application is using an event or polling based input system, tracking the pose of any input source is handled the same way. Input events, just like `requestFrame` callbacks, will provide a `VRPresentationFrame` object that can be used to query the pose of a `VRInputSource` in a given coordinate system. The `frame` can also be used to query the `VRDevicePose`, but since these events fall outside the render loop no `VRViews` will be provided.
 
 ```js
 function onVrStart() {
@@ -50,7 +104,7 @@ function onVrStart() {
 
 function onControllerAdded(event) {
   // Get the initial pose for the controller that just connected.
-  let controllerPose = event.frame.getControllerPose(event.controller, vrFrameOfRef);
+  let inputPose = event.frame.getInputPose(event.inputSource, vrFrameOfRef);
 
   // Also grab the head pose.
   let headPose = event.frame.getDevicePose(vrFrameOfRef);
@@ -70,7 +124,7 @@ function onDrawFrame(vrFrame) {
   let controllers = vrSession.getControllers();
 
   for (let controller of controllers) {
-    let controllerPose = vrFrame.getControllerPose(controller, vrFrameOfRef);
+    let controllerPose = vrFrame.getInputPose(controller, vrFrameOfRef);
 
     if (controllerPose) {
       // Draw a representation of the controller for each view
@@ -90,12 +144,12 @@ function onDrawFrame(vrFrame) {
 }
 ```
 
-If a controller can be tracked the `VRControllerPose` will provide a `poseFromOriginMatrix` to indicate it's position and orientation. This will be `null` if the controller can't be tracked or has temporarily lost tracking.
+If an input source can be tracked the `VRInputPose` will provide a `poseFromOriginMatrix` to indicate it's position and orientation. This will be `null` if the input source can't be tracked or has temporarily lost tracking.
 
-Even controllers with no tracking capabilities, however, must provide a `pointerFromOriginMatrix`. This represents a transform to be applied to a ray which points from the origin down the negative Z axis, and indicates where the controller is "pointing". If the controller has no tracking capabilities the pointer ray should originate from the users head and follow their gaze. If a pointer ray cannot be determined because a tracked controller has lost tracking or the users head has lost tracking with a non-tracked controller, this will be `null`.
+Even input sources with no tracking capabilities, however, must provide a `pointerFromOriginMatrix`. This represents a transform to be applied to a ray which points from the origin down the negative Z axis, and indicates where the input is "pointing". If the input source has no tracking capabilities the pointer ray should originate from the users head and follow their gaze. If a pointer ray cannot be determined because a tracked source has lost tracking or the users head has lost tracking with a non-tracked source, this will be `null`.
 
-### Input states
-Controller input state (joysticks, touchpads, triggers, and buttons) can be read at any point, not just within frame or event callbacks, but may not be updated more frequently than the frame loop. The `VRControllerInput` objects are "live", meaning that the same object gets updated over time with new values.
+### Controller element states
+Controller elements (joysticks, touchpads, triggers, and buttons) can be read at any point, not just within frame or event callbacks, but may not be updated more frequently than the frame loop. The `VRControllerInput` objects are "live", meaning that the same object gets updated over time with new values.
 
 ```js
 function printControllerStates() {
@@ -103,28 +157,26 @@ function printControllerStates() {
 
   for (let controller of controllers) {
     // Can't get poses without a VRPresentationFrame, so ignore that for now.
-
-    `string text ${expression} string text`
     let controllerString = `Controller State (hand: ${controller.hand})\n`;
 
-    controllerString += inputStateString('touchpad', input.touchpad);
-    controllerString += inputStateString('joystick', input.joystick);
-    controllerString += inputStateString('trigger', input.trigger);
-    controllerString += inputStateString('grip', input.grip);
+    controllerString += controllerElementString('touchpad', controller.touchpad);
+    controllerString += controllerElementString('joystick', controller.joystick);
+    controllerString += controllerElementString('trigger', controller.trigger);
+    controllerString += controllerElementString('grip', controller.grip);
 
-    for (let [name, input] of input.extendedInputs) {
-      controllerString += inputStateString(name, input);
+    for (let [name, element] of controller.extendedElements) {
+      controllerString += controllerElementString(name, element);
     }
 
     console.log(controllerString);
   }
 }
 
-function inputStateString(name, input) {
+function controllerElementString(name, input) {
   if (!input)
     return null;
 
-  let stateString = `${name} - `;
+  let stateString = `  ${name} - `;
 
   if (input.xAxis)
     stateString += `X: ${input.xAxis}, `;
@@ -152,12 +204,12 @@ function onVrStart() {
 }
 
 function onTouchStart(event) {
-  if (event.input == event.controller.touchpad)
+  if (event.element == event.inputSource.touchpad)
     displayMenuOverlay();
 }
 
 function onTouchEnd(event) {
-  if (event.input == event.controller.touchpad)
+  if (event.element == event.inputSource.touchpad)
     hideMenuOverlay();
 }
 
@@ -167,26 +219,17 @@ function onTouchEnd(event) {
 
 ```js
 function onVrStart() {
-  vrSession.addEventListener("selectstart", onSelectStartGesture);
-  vrSession.addEventListener("selectend", onSelectEndGesture);
+  vrSession.addEventListener("select", onSelectGesture);
 }
 
-function onSelectStartGesture(event) {
-  let pose = event.frame.getControllerPose(event.controller, vrFrameOfRef);
+function onSelectGesture(event) {
+  let pose = event.frame.getInputPose(event.inputSource, vrFrameOfRef);
   if (pose) {
     // Ray cast into scene with the pointer to determine if anything was hit.
     // If so, cache the object for testing later.
-    selectedObject = scene.rayPick(pose.pointerFromOriginMatrix);
-  }
-}
-
-function onSelectEndGesture(event) {
-  let pose = event.frame.getControllerPose(event.controller, vrFrameOfRef);
-  if (pose) {
-    // See if selection started and ended on the same object. If so, perform
-    // some action on the object.
-    if (selectedObject == scene.rayPick(pose.pointerFromOriginMatrix)) {
-      onSelection(selectedObject);
+    let selectedObject = scene.rayPick(pose.pointerFromOriginMatrix);
+    if (selectedObject) {
+      onSelection(selectedObject)
     }
   }
 }
@@ -195,7 +238,7 @@ function onSelectEndGesture(event) {
 ## Appendix A: I don’t understand why this is a new API. Why can’t we use…
 
 ### Pointer events
-Pointer events and their various sub-parts (mouse, touch, etc.) were created with the needs of a 2D web in mind, and serve that purpose well. Trying to bolt on an understanding of 3D space would both over-complicate the APIs with functionality that most pages don't need and make VR input a second-class citizen within the larger pointer even model.
+Pointer events and their various sub-parts (mouse, touch, etc.) were created with the needs of a 2D web in mind, and serve that purpose well. Trying to bolt on an understanding of 3D space would both over-complicate the APIs with functionality that most applications don't need and make VR input a second-class citizen within the larger pointer even model.
 
 We do expect that many future VR uses (such as interacting with 2D DOM rectangles in 3D space) will need to emulate 2D input methods, producing appropriately transformed pointer events in response to VR input.
 
@@ -209,57 +252,71 @@ This was actually the first thing that we tried, extending the API with the nece
 // Controllers
 //
 
-enum VRControllerHand {
+enum VRInputSourceType {
+  "pointerevent",
+  "gamepad",
+  "controller"
+};
+
+// Name conflict: pointer events and VR pointer. Better term?
+enum VRPointerOrigin {
+  "screen",
+  "head",
+  "hand",
+};
+
+interface VRInputSource {
+  readonly attribute VRInputSourceType type;
+  readonly attribute VRPointerOrigin pointerOrigin;
+};
+
+interface VRGamepadInputSource : VRInputSource {
+  readonly attribute Gamepad gamepad;
+};
+
+enum VRHand {
   "",
   "left",
   "right"
 };
 
-// Ugh on the name. Need to disambiguate from "Input" though.
-interface VRController {
-  readonly attribute VRControllerHand hand;
+interface VRController : VRInputSource {
+  readonly attribute VRHand hand;
 
-  readonly attribute VRControllerInput? touchpad;
-  readonly attribute VRControllerInput? joystick;
-  readonly attribute VRControllerInput? trigger;
-  readonly attribute VRControllerInput? grip;
-  readonly attribute VRControllerInputMap extendedInputs;
+  readonly attribute VRControllerElement? touchpad;
+  readonly attribute VRControllerElement? joystick;
+  readonly attribute VRControllerElement? trigger;
+  readonly attribute VRControllerElement? grip;
+  readonly attribute VRControllerElementMap extendedElements; // :P
+};
 
-  VRControllerInput? queryInput(DOMString selector); // v0.1+?
+interface VRControllerInputMap {
+  readonly maplike<DOMString, VRControllerElement>;
+};
+
+interface VRControllerElement {
+  readonly attribute boolean pressed;
+  readonly attribute boolean touched;
+  readonly attribute double  value;
+  readonly attribute double? xAxis;
+  readonly attribute double? yAxis;
 };
 
 //
-// Input
+// Frame
 //
 
-interface VRControllerPose {
+interface VRInputPose {
   readonly attribute Float32Array? poseFromOriginMatrix;
   readonly attribute Float32Array? pointerFromOriginMatrix;
 
   // velocity/acceleration here? v0.1+?
 };
 
-interface VRControllerInputMap {
-  readonly maplike<DOMString, VRControllerInput>;
-};
-
-// Live object
-interface VRControllerInput {
-  readonly attribute DOMString name;
-
-  readonly attribute boolean pressed;
-  readonly attribute boolean touched;
-  readonly attribute double  value;
-  readonly attribute double? xAxis;
-  readonly attribute double? yAxis;
-}
-
-//
-// Frame
-//
-
 partial interface VRPresentationFrame {
-  VRControllerPose? getControllerPose(VRController controller, VRCoordinateSystem coordinateSystem);
+  readonly attribute VRInputSource primaryInputSource;
+
+  VRInputPose? getInputPose(VRInputSource inputSource, VRCoordinateSystem coordinateSystem);
 };
 
 //
@@ -283,46 +340,30 @@ partial interface VRSession : VRGestureTarget {
 //
 
 interface VRGestureTarget : EventTarget {
-  attribute EventHandler onselectstart;
-  attribute EventHandler onselectend;
+  attribute EventHandler onselect;
 }
 
 [Constructor(DOMString type, VRControllerEventInit eventInitDict)]
-interface VRControllerEvent : Event {
+interface VRInputSourceEvent : Event {
   readonly attribute VRPresentationFrame frame;
-  readonly attribute VRController controller;
+  readonly attribute VRInputSource inputSource;
 };
 
-dictionary VRControllerEventInit : EventInit {
+dictionary VRInputSourceEventInit : EventInit {
   required VRPresentationFrame frame;
-  required VRController controller;
+  required VRInputSource inputSource;
 };
 
 [Constructor(DOMString type, VRControllerInputStateEventInit eventInitDict)]
-interface VRControllerInputStateEvent : Event {
+interface VRControllerElementEvent : Event {
   readonly attribute VRPresentationFrame frame;
-  readonly attribute VRController controller;
-  readonly attribute VRControllerInput input;
+  readonly attribute VRController inputSource;
+  readonly attribute VRControllerElement element;
 };
 
-dictionary VRControllerInputStateEventInit : EventInit {
+dictionary VRControllerElementEventInit : EventInit {
   required VRPresentationFrame frame;
-  required VRController controller;
-  required VRControllerInput input;
-};
-
-[Constructor(DOMString type, VRGestureEventInit eventInitDict)]
-interface VRGestureEvent : Event {
-  readonly attribute VRPresentationFrame frame;
-  readonly attribute VRController controller;
-  readonly attribute VRControllerInput input;
-  // Normal `target` attribute is always guaranteed to be a VRGestureTarget
-};
-
-dictionary VRGestureEventInit : EventInit {
-  required VRPresentationFrame frame;
-  required VRController controller;
-  required VRControllerInput input;
-  // Again, existing `target` takes on new meaning here.
+  required VRController inputSource;
+  required VRControllerElement element;
 };
 ```
