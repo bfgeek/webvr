@@ -149,7 +149,9 @@ If an input source can be tracked the `VRInputPose` will provide a `poseFromOrig
 Even input sources with no tracking capabilities, however, must provide a `pointerFromOriginMatrix`. This represents a transform to be applied to a ray which points from the origin down the negative Z axis, and indicates where the input is "pointing". If the input source has no tracking capabilities the pointer ray should originate from the users head and follow their gaze. If a pointer ray cannot be determined because a tracked source has lost tracking or the users head has lost tracking with a non-tracked source, this will be `null`.
 
 ### Controller element states
-Controller elements (joysticks, touchpads, triggers, and buttons) can be read at any point, not just within frame or event callbacks, but may not be updated more frequently than the frame loop. The `VRControllerInput` objects are "live", meaning that the same object gets updated over time with new values.
+Controller elements (joysticks, touchpads, triggers, and buttons) can be read at any point, not just within frame or event callbacks, but may not be updated more frequently than the frame loop. The `VRControllerElement` objects are "live", meaning that the same object gets updated over time with new values.
+
+The elements are provided in a map, with each element's name serving as the key. This allows them to be easily iterated over or accessed directly by name:
 
 ```js
 function printControllerStates() {
@@ -159,12 +161,7 @@ function printControllerStates() {
     // Can't get poses without a VRPresentationFrame, so ignore that for now.
     let controllerString = `Controller State (hand: ${controller.hand})\n`;
 
-    controllerString += controllerElementString('touchpad', controller.touchpad);
-    controllerString += controllerElementString('joystick', controller.joystick);
-    controllerString += controllerElementString('trigger', controller.trigger);
-    controllerString += controllerElementString('grip', controller.grip);
-
-    for (let [name, element] of controller.extendedElements) {
+    for (let [name, element] of controller.elements) {
       controllerString += controllerElementString(name, element);
     }
 
@@ -172,23 +169,48 @@ function printControllerStates() {
   }
 }
 
-function controllerElementString(name, input) {
+function controllerElementString(name, element) {
   if (!input)
     return null;
 
   let stateString = `  ${name} - `;
 
   if (input.xAxis)
-    stateString += `X: ${input.xAxis}, `;
+    stateString += `X: ${element.xAxis}, `;
 
   if (input.yAxis)
-    stateString += `Y: ${input.yAxis}, `;
+    stateString += `Y: ${element.yAxis}, `;
 
-  stateString += `pressed: ${input.pressed}, `;
-  stateString += `touched: ${input.touched}, `;
-  stateString += `value: ${input.value}\n`;
+  stateString += `pressed: ${element.pressed}, `;
+  stateString += `touched: ${element.touched}, `;
+  stateString += `value: ${element.value}\n`;
 
   return stateString;
+}
+```
+
+Elements should be given lowercase names that match the description given to them by the hardware manufacturer when possible. For example, if there are buttons on the controller labeled "A" and "B", they should be named "a" and "b". If the elements did not have any obvious name, they should be given numbered names according to their percieved order of importance, such as "button1", "trigger2", etc. In addition there are several "common" element names that must be used if the controller element fits the usage they describe, even if the manufacturer provides a slightly different name. These common elements are:
+
+ - "touchpad"
+ - "joystick"
+ - "trigger"
+ - "grip"
+
+This enables applications to easily check for the presence of commonly used controller elements and access their values reliably.
+
+```js
+// Updates the position of an object in the scene based on the user's thumb
+// motion on whatever controller element is available.
+function updateMovement(controller) {
+  if (controller.elements.joystick) {
+    object.x += controller.elements.joystick.axisX;
+    object.y += controller.elements.joystick.axisY;
+  } else if (controller.elements.touchpad) {
+    if (controller.elements.touchpad.touched) {
+      object.x += controller.elements.touchpad.axisX;
+      object.y += controller.elements.touchpad.axisY;
+    }
+  }
 }
 ```
 
@@ -283,11 +305,7 @@ enum VRHand {
 interface VRController : VRInputSource {
   readonly attribute VRHand hand;
 
-  readonly attribute VRControllerElement? touchpad;
-  readonly attribute VRControllerElement? joystick;
-  readonly attribute VRControllerElement? trigger;
-  readonly attribute VRControllerElement? grip;
-  readonly attribute VRControllerElementMap extendedElements; // :P
+  readonly attribute VRControllerElementMap elements; // :P
 };
 
 interface VRControllerInputMap {
@@ -314,8 +332,6 @@ interface VRInputPose {
 };
 
 partial interface VRPresentationFrame {
-  readonly attribute VRInputSource primaryInputSource;
-
   VRInputPose? getInputPose(VRInputSource inputSource, VRCoordinateSystem coordinateSystem);
 };
 
@@ -365,5 +381,18 @@ dictionary VRControllerElementEventInit : EventInit {
   required VRPresentationFrame frame;
   required VRController inputSource;
   required VRControllerElement element;
+};
+
+[Constructor(DOMString type, VRControllerInputStateEventInit eventInitDict)]
+interface VRGestureEvent : Event {
+  readonly attribute VRPresentationFrame frame;
+  readonly attribute VRInputSource inputSource;
+  readonly attribute DOMString element;
+};
+
+dictionary VRGestureEventInit : EventInit {
+  required VRPresentationFrame frame;
+  required VRInputSource inputSource;
+  required DOMString element;
 };
 ```
