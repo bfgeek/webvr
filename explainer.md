@@ -495,7 +495,7 @@ vrSession.addEventListener('resetpose', vrSessionEvent => {
 
 ### Presenting automatically when the user interacts with the headset
 
-Many VR devices have some way of detecting when the user has put the headset on or is otherwise trying to use the hardware. For example: an Oculus Rift or Vive have proximity sensors that indicate when the headset is being worn. And a Daydream device uses NFC tags to inform the phone when it's been placed in a headset. This is referred to as the `VRDevice` being "activated", and represents the user showing a clear intent to begin using VR. A well behaved WebVR application should ideally begin presenting automatically in these scenarios.
+Many VR devices have some way of detecting when the user has put the headset on or is otherwise trying to use the hardware. For example: an Oculus Rift or Vive have proximity sensors that indicate when the headset is being worn. And a Daydream device uses NFC tags to inform the phone when it's been placed in a headset. This is referred to as the `VRDevice` being "activated", and depending on context it may represent the user showing a clear intent to begin using VR. A well behaved WebVR application should ideally begin presenting automatically in these scenarios.
 
 In order to start presenting when the `VRDevice` is activated pages can request a deferred session. A deferred session is requested using the normal `requestSession` function and given a `deferTill` option to indicate the criteria that must be fulfilled before the session will be created. So if a session is requested with the option `{ deferTill: 'activate' }` the request will remain outstanding until the `VRDevice` is activated, at which point the promise will resolve with the requested session (or reject, if necessary.)
 
@@ -506,9 +506,9 @@ Deferred sessions must be exclusive and will not be fulfilled if there is alread
 vrDevice.requestSession({ deferTill: 'activate' }).then(OnSessionStarted);
 ```
 
-Once the session has ended a new deferred session request will need to be issued if the page wishes to respond to future activation actions.
+Once the deferred session request has been fulfilled or rejected a new deferred session request will need to be issued if the page wishes to respond to future activation actions.
 
-To detect when the user removes the headset, at which point the page may want to end the session, listen for the `deactivate` event.
+To detect when the user removes the headset, at which point the page may want to end the session, listen for the `deactivate` event. Note that not all devices capable of detecting activation can reliable detect deactivation, so pages are not guaranteed to receive an associated deactivate event for each activation action.
 
 ```js
 vrDevice.addEventListener('deactivate', (vrDeviceEvent) => {
