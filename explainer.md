@@ -493,6 +493,48 @@ vrSession.addEventListener('resetpose', vrSessionEvent => {
 });
 ```
 
+### Presenting automatically when the user interacts with the headset
+
+Many VR devices have some way of detecting when the user has put the headset on or is otherwise trying to use the hardware. For example: an Oculus Rift or Vive have proximity sensors that indicate when the headset is being worn. And a Daydream device uses NFC tags to inform the phone when it's been placed in a headset. This is referred to as the `VRDevice` being "activated", and represents the user showing a clear intent to begin using VR. A well behaved WebVR application should ideally begin presenting automatically in these scenarios.
+
+In order to start presenting when the `VRDevice` is activated pages can request a deferred session. A deferred session is requested using the normal `requestSession` function and given a `deferTill` option to indicate the criteria that must be fulfilled before the session will be created. So if a session is requested with the option `{ deferTill: 'activate' }` the request will remain outstanding until the `VRDevice` is activated, at which point the promise will resolve with the requested session (or reject, if necessary.)
+
+Deferred sessions must be exclusive and will not be fulfilled if there is already an exclusive session active for the VR hardware device when the activation action occurs. Deferred requests do not need to be made within a user gesture.
+
+```js
+// Requests that a session be created when the device is activated.
+vrDevice.requestSession({ deferTill: 'activate' }).then(OnSessionStarted);
+```
+
+Once the session has ended a new deferred session request will need to be issued if the page wishes to respond to future activation actions.
+
+To detect when the user removes the headset, at which point the page may want to end the session, listen for the `deactivate` event.
+
+```js
+vrDevice.addEventListener('deactivate', (vrDeviceEvent) => {
+  if (vrSession) {
+    vrSession.endSession().then(OnSessionEnded);
+  }
+});
+```
+
+### Page navigation
+
+WebVR applications can, like any web page, link to other pages. In the context of an exclusive `VRSession` this is handled by setting `window.location` to the desired URL when the user performs some action. If the page being linked to is not VR-capable the user will either have to remove the VR device to view it (which the UA should explicitly instruct them to do) or the page could be shown as a 2D page in a VR browser.
+
+If the page being navigated to is VR capable, however, it's frequently desirable to allow the user to immediately create an exclusive `VRSession` for that page as well, so that the user feels as though they are navigating through a single continuous VR experience. To achieve this the page can query `navigator.vr.getNavigationDevice()` which returns a promise. If the page was navigated to from an exclusive `VRSession` the promise will resolve with the `VRDevice` that the previous session was created with. If not, the promise immediately rejects.
+
+Additionally the page can request a deferred session with the same device returned by `getNavigationDevice()` using the `{ deferTill: "navigate" }` option. If the page has been navigated to from an exclusive WebVR session, the request will be resolved when the page is ready to begin presenting. If the page was not navigated to from an exclusive session the request will reject immediately. This type of deferred session is only allowed once, and subsequent requests using the "navigate" defer criteria will also be rejected immediately. Additionally, the session must be requested within a User Agent-defined period after the page load or the ability to request a navigation deferred session expires.
+
+```js
+// Check to see if the page was navigated to from an exclusive session.
+navigator.vr.getNavigationDevice().then(device => {
+  // If so request a deferred navigation session to provide a more continuous VR
+  // experience to the user.
+  device.requestSession({ deferTill: 'navigate' }).then(OnSessionStarted);
+});
+```
+
 ## Appendix A: I don’t understand why this is a new API. Why can’t we use…
 
 ### `DeviceOrientation` Events
@@ -537,6 +579,7 @@ interface VR : EventTarget {
   attribute EventHandler ondevicedisconnect;
 
   Promise<sequence<VRDevice>> getDevices();
+  Promise<VRDevice> getNavigationDevice();
 };
 
 //
@@ -547,6 +590,8 @@ interface VRDevice : EventTarget {
   readonly attribute DOMString deviceName;
   readonly attribute boolean isExternal;
 
+  attribute EventHandler ondeactivate;
+
   Promise<void> supportsSession(optional VRSessionCreateParametersInit parameters);
   Promise<VRSession> requestSession(optional VRSessionCreateParametersInit parameters);
 };
@@ -555,12 +600,20 @@ interface VRDevice : EventTarget {
 // Session
 //
 
+enum VRSessionDeferCriteria {
+  "",
+  "activate",
+  "navigate",
+};
+
 dictionary VRSessionCreateParametersInit {
   boolean exclusive = true;
+  VRSessionDeferCriteria deferTill = "";
 };
 
 interface VRSessionCreateParameters {
   readonly attribute boolean exclusive;
+  readonly attribute VRSessionDeferCriteria deferTill;
 };
 
 interface VRSession : EventTarget {
