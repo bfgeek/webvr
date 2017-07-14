@@ -84,13 +84,13 @@ function shouldDrawRay(inputSource) {
 }
 ```
 
-### Primary input device
-Every `VRPresentationFrame` reports a `primaryInputSource`. This can change from frame to frame, and may jump between different source types as the user interacts with various devices. In most cases, though, the frame's `primaryInputSource` is the one that will be generating gesture events and should be considered first before processing other input sources.
-
 ### Controller state
 The WebVR input API also exposes the state of the raw input elements of purpose built VR controllers, such as the tracked controllers for the Vive or Daydream systems, but does not attempt to describe the state of input sources that are already surfaced by the UA, such as mouse, keyboard, touch, stylus, or gamepad inputs.
 
 These controllers can be queried from the `VRSession` with the `getControllers` method, which returns an array of the currently connected controllers.
+
+### Primary input source
+Every `VRPresentationFrame` reports a `primaryInputSource`. This can change from frame to frame, and may jump between different source types as the user interacts with various devices. In most cases, though, the frame's `primaryInputSource` is the one that has most recently generated a gesture event. For example: If the user is actively using a motion controller it will be reported as the `primaryInputSource` as well as still appearing in the `VRSession.getControllers` array. If the user begins pressing buttons on a gamepad, however, the `primaryInputSource` would start reporting a `VRGamepadInputSource`.
 
 ## Basic WebVR Input usage
 
@@ -126,18 +126,15 @@ function onDrawFrame(vrFrame) {
   for (let controller of controllers) {
     let controllerPose = vrFrame.getInputPose(controller, vrFrameOfRef);
 
-    if (controllerPose) {
+    // poseFromOriginMatrix will only be present on tracked controllers.
+    if (controllerPose && controllerPose.poseFromOriginMatrix) {
+
       // Draw a representation of the controller for each view
       for (let view of vrFrame.views) {
-        // This will only be present on controllers with a tracked position.
-        if (controllerPose.poseFromOriginMatrix) {
-          drawController(view, controllerPose.poseFromOriginMatrix);
-        }
+        let viewport = view.getViewport(vrSession.baseLayer);
+        gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
 
-        // This should be present for any controller.
-        if (controllerPose.pointerFromOriginMatrix) {
-          drawCursor(view, controllerPose.pointerFromOriginMatrix);
-        }
+        drawController(view, controllerPose.poseFromOriginMatrix);
       }
     }
   }
@@ -147,6 +144,42 @@ function onDrawFrame(vrFrame) {
 If an input source can be tracked the `VRInputPose` will provide a `poseFromOriginMatrix` to indicate it's position and orientation. This will be `null` if the input source can't be tracked or has temporarily lost tracking.
 
 Even input sources with no tracking capabilities, however, must provide a `pointerFromOriginMatrix`. This represents a transform to be applied to a ray which points from the origin down the negative Z axis, and indicates where the input is "pointing". If the input source has no tracking capabilities the pointer ray should originate from the users head and follow their gaze. If a pointer ray cannot be determined because a tracked source has lost tracking or the users head has lost tracking with a non-tracked source, this will be `null`.
+
+### Primary input visualization
+In almost all cases if a pick-ray visualization is going to be rendered it should be done using the `primaryInputSource` pose. When rendering the application should take into consideration the `pointerVisualStyle`, which indicates what elements of a the pointer make sense to draw for that input source.
+
+* "ray": Pointer should be rendered as a ray, optionally with a cursor shown at the point of ray intersection with the scene.
+* "cursor": Pointer should be rendered as a cursor with no associated ray. This is used for gaze-based selection scenarios where having a ray emitting from the users head would be visually confusing.
+* "none": The pointer's should not be given a visual representation. This is used in scenarios where rendering a pointer doesn't make sense or a pointer visualization is provided by the system. An example would be a Magic Window session on a touchscreen or desktop.
+
+```js
+function drawPrimaryPointer(vrFrame) {
+  // Determine if there is a primary input source and if it should be drawn
+  if (vrFrame.primaryInputSource &&
+      vrFrame.primaryInputSource.visualStyle != "none") {
+    let primaryInputPose = vrFrame.getInputPose(
+        vrFrame.primaryInputSource, vrFrameOfRef);
+
+    // This should be present for most input sources. Main exception is
+    // Magic Window w/ touchscreens.
+    if (primaryInputPose && primaryInputPose.pointerFromOriginMatrix) {
+      // Draw a representation of the controller for each view
+      for (let view of vrFrame.views) {
+        let viewport = view.getViewport(vrSession.baseLayer);
+        gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
+
+        if (vrFrame.primaryInputSource.visualStyle == "ray") {
+          drawRay(view, primaryInputPose.pointerFromOriginMatrix);
+        }
+        if (vrFrame.primaryInputSource.visualStyle == "ray" ||
+            vrFrame.primaryInputSource.visualStyle == "cursor") {
+          drawCursor(view, primaryInputPose.pointerFromOriginMatrix);
+        }
+      }
+    }
+  }
+}
+```
 
 ### Controller element states
 Controller elements (joysticks, touchpads, triggers, and buttons) can be read at any point, not just within frame or event callbacks, but may not be updated more frequently than the frame loop. The `VRControllerElement` objects are "live", meaning that the same object gets updated over time with new values.
@@ -280,16 +313,15 @@ enum VRInputSourceType {
   "controller"
 };
 
-// Name conflict: pointer events and VR pointer. Better term?
-enum VRPointerOrigin {
-  "screen",
-  "head",
-  "hand",
+enum VRPointerVisualStyle {
+  "none",
+  "cursor",
+  "ray"
 };
 
 interface VRInputSource {
   readonly attribute VRInputSourceType type;
-  readonly attribute VRPointerOrigin pointerOrigin;
+  readonly attribute VRPointerVisualStyle pointerVisualStyle;
 };
 
 interface VRGamepadInputSource : VRInputSource {
@@ -332,6 +364,8 @@ interface VRInputPose {
 };
 
 partial interface VRPresentationFrame {
+  VRInputSource primaryInputSource;
+
   VRInputPose? getInputPose(VRInputSource inputSource, VRCoordinateSystem coordinateSystem);
 };
 
