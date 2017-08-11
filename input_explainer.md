@@ -64,33 +64,10 @@ function processInputSource(inputSource) {
 }
 ```
 
-The `VRInputSource` also describes where the pointer ray will originate from, which can be used to determine what type of rendering is appropriate for that input.
-
-```js
-function shouldDrawCursor(inputSource) {
-  switch (inputSource.pointerOrigin) {
-    case 'screen': return false;
-    case 'head': return true;
-    case 'hand': return true;
-  }
-}
-
-function shouldDrawRay(inputSource) {
-  switch (inputSource.pointerOrigin) {
-    case 'screen': return false;
-    case 'head': return false;
-    case 'hand': return true;
-  }
-}
-```
-
 ### Controller state
-The WebVR input API also exposes the state of the raw input elements of purpose built VR controllers, such as the tracked controllers for the Vive or Daydream systems, but does not attempt to describe the state of input sources that are already surfaced by the UA, such as mouse, keyboard, touch, stylus, or gamepad inputs.
+The WebVR input API also exposes the state of the raw input elements of purpose-built VR controllers, such as the tracked controllers for the Vive or Daydream systems, but does not attempt to describe the state of input sources that are already surfaced by the UA, such as mouse, keyboard, touch, stylus, or gamepad inputs.
 
 These controllers can be queried from the `VRSession` with the `getControllers` method, which returns an array of the currently connected controllers.
-
-### Primary input source
-Every `VRPresentationFrame` reports a `primaryInputSource`. This can change from frame to frame, and may jump between different source types as the user interacts with various devices. In most cases, though, the frame's `primaryInputSource` is the one that has most recently generated a gesture event. For example: If the user is actively using a motion controller it will be reported as the `primaryInputSource` as well as still appearing in the `VRSession.getControllers` array. If the user begins pressing buttons on a gamepad, however, the `primaryInputSource` would start reporting a `VRGamepadInputSource`.
 
 ## Basic WebVR Input usage
 
@@ -144,42 +121,6 @@ function onDrawFrame(vrFrame) {
 If an input source can be tracked the `VRInputPose` will provide a `poseFromOriginMatrix` to indicate it's position and orientation. This will be `null` if the input source can't be tracked or has temporarily lost tracking.
 
 Even input sources with no tracking capabilities, however, must provide a `pointerFromOriginMatrix`. This represents a transform to be applied to a ray which points from the origin down the negative Z axis, and indicates where the input is "pointing". If the input source has no tracking capabilities the pointer ray should originate from the users head and follow their gaze. If a pointer ray cannot be determined because a tracked source has lost tracking or the users head has lost tracking with a non-tracked source, this will be `null`.
-
-### Primary input visualization
-In almost all cases if a pick-ray visualization is going to be rendered it should be done using the `primaryInputSource` pose. When rendering the application should take into consideration the `pointerVisualStyle`, which indicates what elements of a the pointer make sense to draw for that input source.
-
-* "ray": Pointer should be rendered as a ray, optionally with a cursor shown at the point of ray intersection with the scene.
-* "cursor": Pointer should be rendered as a cursor with no associated ray. This is used for gaze-based selection scenarios where having a ray emitting from the users head would be visually confusing.
-* "none": The pointer's should not be given a visual representation. This is used in scenarios where rendering a pointer doesn't make sense or a pointer visualization is provided by the system. An example would be a Magic Window session on a touchscreen or desktop.
-
-```js
-function drawPrimaryPointer(vrFrame) {
-  // Determine if there is a primary input source and if it should be drawn
-  if (vrFrame.primaryInputSource &&
-      vrFrame.primaryInputSource.visualStyle != "none") {
-    let primaryInputPose = vrFrame.getInputPose(
-        vrFrame.primaryInputSource, vrFrameOfRef);
-
-    // This should be present for most input sources. Main exception is
-    // Magic Window w/ touchscreens.
-    if (primaryInputPose && primaryInputPose.pointerFromOriginMatrix) {
-      // Draw a representation of the controller for each view
-      for (let view of vrFrame.views) {
-        let viewport = view.getViewport(vrSession.baseLayer);
-        gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
-
-        if (vrFrame.primaryInputSource.visualStyle == "ray") {
-          drawRay(view, primaryInputPose.pointerFromOriginMatrix);
-        }
-        if (vrFrame.primaryInputSource.visualStyle == "ray" ||
-            vrFrame.primaryInputSource.visualStyle == "cursor") {
-          drawCursor(view, primaryInputPose.pointerFromOriginMatrix);
-        }
-      }
-    }
-  }
-}
-```
 
 ### Controller element states
 Controller elements (joysticks, touchpads, triggers, and buttons) can be read at any point, not just within frame or event callbacks, but may not be updated more frequently than the frame loop. The `VRControllerElement` objects are "live", meaning that the same object gets updated over time with new values.
@@ -290,6 +231,96 @@ function onSelectGesture(event) {
 }
 ```
 
+## Input visualization
+
+### Cursor rendering
+Many VR applications will want to render a cursor and possibly a ray to visualize where the user is pointing and what will be targeted when the user performs a select gesture. When rendering the application should take into consideration the types of inputs available and the mode the application is in to determine what elements of a the pointer make sense to draw.
+
+* If tracked controllers are present, a pointer should be rendered as a ray originating from each controller, optionally with a cursor shown at the point of ray intersection with the scene.
+* In exclusive sessions where no tracked controllers are present, the VRDevicePose should be used to render a cursor with no associated ray. This is used for gaze-based selection scenarios where having a ray emitting from the users head would be visually confusing.
+* In non-exclusive sessions the VRDevicePose pointer should not be given a visual representation. In this case input will likely be coming from a touchscreen or mouse, and as such a gaze cursor is nonsensical.
+
+```js
+function drawPrimaryPointer(vrFrame) {
+  let controllers = vrFrame.session.getControllers();
+
+  if (controllers.length) {
+    // When tracked controllers are present, draw a pointer for each of them.
+    for (let controller of controllers) {
+      let inputPose = vrFrame.getInputPose(controller, vrFrameOfRef);
+
+      if (inputPose && inputPose.pointerFromOriginMatrix) {
+        // Draw a representation of the controller's pick ray for each view.
+        for (let view of vrFrame.views) {
+          let viewport = view.getViewport(vrSession.baseLayer);
+          gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
+
+          drawRay(view, inputPose.pointerFromOriginMatrix);
+          drawCursor(view, inputPose.pointerFromOriginMatrix);
+        }
+      }
+    }
+  } else if (vrFrame.session.exclusive) {
+    // When no tracked controllers are present in an exclusive session, draw a
+    // gaze cursor.
+    let devicePose = vrFrame.getDevicePose(vrFrameOfRef);
+    if (devicePose) {
+      // Draw the gaze cursor for each view.
+      for (let view of vrFrame.views) {
+        let viewport = view.getViewport(vrSession.baseLayer);
+        gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
+
+        drawCursor(view, devicePose.poseModelMatrix);
+      }
+    }
+  }
+}
+```
+
+### Controller rendering
+
+When using tracked controllers users expect to be able to see a visual representation of the controller in VR applications. The representation typically breaks down into one of two categories: In some cases the VR app has a contextually relevant visualization that it prefers to use, such as a sword, paint brush, hands, etc. that is well suited to the mechanics and artistic direction of the app. In all other cases it's typically preferable to show something that matches what the user is physically holding as closely as possible.
+
+To achive the latter effect, applications can query a mesh that represents a given controller using `VRController`'s `mesh` attribute. Calling the `mesh`'s `requestBuffer()` method returns a promise which resolves to an `ArrayBuffer` containing a [Binary glTF 2.0](https://github.com/KhronosGroup/glTF/tree/master/specification/2.0#binary-gltf-layout) asset that visually represents the controller. The glTF asset must not reference any external resources, but may contain embedded textures. The mesh data it provides must be properly sized such that it matches the phyical controller dimensions as closely as possible using a scale of 1 unit equaling 1 real-world meter.
+
+Multiple `VRController`s may share the same `VRControllerMesh`, which allows them to be rendered as instances of a single resource.
+
+If the UA cannot provide a mesh that accurately reflects the user's physical hardware it is allowed to provide a generic mesh instead to ensure the user has some sense of where their controllers are. This could be something like a hand or generic remote.
+
+Some VR systems allow the user to customize the virtual appearance of their controller. The UA is allowed and encouraged to provide the customized mesh when possible to provide stronger visual continuity between web content and the native system. It should be noted, however, that this is a potential source of high fidelity fingerprinting data and as such UAs should strongly consider gaining user permission before doing exposing custom meshes.
+
+The glTF asset should represent the various movable elements (buttons, triggers, joysticks, etc) of the controller with different nodes in the scene hierarchy so that they can be transformed independently. The UA will then need to provide a way to map `VRController` `element` states to node transforms so that the rendered controller can visually reflect the user's interactions with it's elements. This document does not have a recommendation for how to accomplish that mapping at this time. (Suggestions welcome!)
+
+```js
+// Loads and renders controller meshes using a fictional 3D rendering library.
+function loadControllerMeshes() {
+  let controllers = vrSession.getControllers();
+
+  for (let controller of controllers) {
+    controller.mesh.requestBuffer().then((gltfArrayBuffer) => {
+      controller._meshNode = GLTF2Loader.parseBinary(gltfArrayBuffer);
+      scene.addNode(controller._meshNode);
+    });
+  }
+}
+
+function onVRFrame(vrFrame) {
+  // Update the controller state.
+  let controllers = vrSession.getControllers();
+
+  for (let controller of controllers) {
+    if (controller._meshNode) {
+      let controllerPose = vrFrame.getInputPose(controller, vrFrameOfRef);
+      controller._meshNode.setTransform(controllerPose.poseFromOriginMatrix);
+      // TODO: Update element transforms to match controller state.
+    }
+  }
+
+  // Draw the scene, which presumably includes drawing the controller meshes at
+  // their newly updated transforms.
+}
+```
+
 ## Appendix A: I don’t understand why this is a new API. Why can’t we use…
 
 ### Pointer events
@@ -313,15 +344,8 @@ enum VRInputSourceType {
   "controller"
 };
 
-enum VRPointerVisualStyle {
-  "none",
-  "cursor",
-  "ray"
-};
-
 interface VRInputSource {
   readonly attribute VRInputSourceType type;
-  readonly attribute VRPointerVisualStyle pointerVisualStyle;
 };
 
 interface VRGamepadInputSource : VRInputSource {
@@ -336,8 +360,8 @@ enum VRHand {
 
 interface VRController : VRInputSource {
   readonly attribute VRHand hand;
-
-  readonly attribute VRControllerElementMap elements; // :P
+  readonly attribute VRControllerElementMap elements;
+  readonly attribute VRControllerMesh mesh;
 };
 
 interface VRControllerInputMap {
@@ -350,6 +374,10 @@ interface VRControllerElement {
   readonly attribute double  value;
   readonly attribute double? xAxis;
   readonly attribute double? yAxis;
+};
+
+interface VRControllerMesh {
+  Promise<ArrayBuffer> requestBuffer();
 };
 
 //
